@@ -341,7 +341,7 @@ chronyc tracking | grep Stratum
 
 
 - 
-
+https://ru.files.fm/u/f9g3bthbwu
 
 
 
