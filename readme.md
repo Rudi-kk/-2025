@@ -341,3 +341,152 @@ chronyc tracking | grep Stratum
 
 
 - 
+
+
+
+
+Глава 1: 
+hostnamectl set-hostname «имя_машины»; exec bash
+имена HQ-SRV и BR-SRV, маршрутизаторы - HQ-RTR и BR-RTR, а рабочие станции назывались HQ-CLI и BR-DC.
+Глава 2: Раздача адресов
+nmtui:
+                 			isp          
+ens34 (bf)      					ens35 (c9)      
+172.16.4.1/28   				172.16.5.1/28   
+172.16.4.2/28   				172.16.5.2/28   
+ens34 (ba)      					ens34 (54)      
+hq-rtr         					br-rtr          
+ens35 (c4)      					ens35 (5e)      
+172.16.0.1/26   				172.16.6.1/27   
+ens33 (d6)      ens34 (af)      			ens33 (b2)      (Он винда)
+172.16.0.2/26   172.16.0.3/28   		172.16.6.2/27   172.16.6.3/27
+hq-srv          hq-cli          			br-srv          br-DC
+
+Глава 3: Создание верных слуг
+создал пользователя sshuser, который мог бы выполнять любые команды 
+useradd -m -u 1010 sshuser
+passwd sshuser
+дающую sshuser неограниченные права:
+nano /etc/sudoers
+Добавил:
+sshuser ALL=(ALL:ALL)NOPASSWD:ALL
+: Ctrl+X, Y, Enter. 
+Глава 4: 
+предупреждение для всех, кто попытается войти без разрешения:
+nano /etc/mybanner
+строгое предупреждение:
+Authorized access only
+Затем настроил защитные механизмы SSH, изменив конфигурационный файл:
+nano /etc/openssh/sshd_config
+Установил:
+#port 22, раскоменчиваем и пишем port 2024
+Banner /etc/mybanner
+MaxAuthTries 2
+ДОБАВИТЬ строчку - AllowUsers sshuser
+После этого перезапустил службу SSH, чтобы изменения вступили в силу:
+systemctl restart sshd.service
+под надежной защитой.
+
+Глава 5: Автоматическая раздача адресов
+администратор настроил DHCP-сервер на HQ-RTR. Сначала он указал, какой интерфейс будет раздавать адреса:		
+nano /etc/sysconfig/dhcpd
+Добавил строку:
+DHCPARGS=ens35
+Затем создал конфигурационный файл, взяв за основу пример:
+cp /etc/dhcp/dhcpd.conf{.example,}
+nano /etc/dhcp/dhcpd.conf
+Прописал основные параметры:
+Доменное имя "au-team.irpo"
+Адреса DNS-серверов
+option domain-name-servers 172.16.0.2;
+Время аренды адресов
+default-lease-time 6000;
+max-lease-time 72000;
+
+Диапазон раздаваемых адресов
+authoritative;
+subnet 172.16.0.0 netmask 255.255.255.192 {
+range 172.16.0.3 172.16.0.8;
+option routers 172.16.0.1;
+}
+
+После этого включил и запустил службу DHCP:
+systemctl enable --now dhcpd
+Теперь все новые автоматически получали свои адреса.
+Глава 6: тоннель между замками
+Туннель HQ и удалённой крепостью BR. Но для этого сначала нужно было получить разрешение от — сервера ISP.
+ISP:
+nano /etc/net/sysctl.conf
+Найдя строку net.ipv4.ip_forward, он изменил её значение на 1
+net.ipv4.ip_forward = 1
+Теперь пакеты могли свободно проходить через ISP. Вдохновлённый, администратор взял волшебный инструмент nmtui и начал настраивать GRE-тоннель между HQ-RTR и BR-RTR. Это было подобно прокладыванию подземного хода — невидимого для посторонних глаз, но надёжно соединяющего два удалённых замка.
+
+Глава 7: Живые дороги OSPF
+На HQ-RTR:
+nano /etc/frr/daemons
+И сменил строку ospfd=no на ospfd=yes
+systemctl enable --now frr
+Войдя в интерфейс vtysh, администратор начал настраивать маршруты:
+conf t
+router ospf
+passive-interface default
+network 192.168.0.0/24 area 0
+network 172.16.0.0/26 area 0
+exit
+interface tun1
+no ip ospf network broadcast
+no ip ospf passive
+exit
+do write memory
+exit
+Не забыл он и про настройку TTL для тоннеля:
+
+bash
+nmcli connection edit tun1
+set ip-tunnel.ttl 64
+save
+quit
+
+Глава 8: Великая книга имён
+ (DNS) на HQ-SRV.
+Он начал с изменения основных настроек:
+nano /etc/bind/options.conf
+Затем создал зоны, скопировав священные образцы:
+cd /etc/bind/zone
+cp localdomain au.db
+cp 127.in-addr.arpa 0.db
+Изменив владельцев файлов, чтобы только избранные могли вносить изменения:
+chown root:named {au,0}.db
+После настройки зонных файлов он перезапустил службу:
+systemctl restart bind
+Теперь, произнеся заклинание:
+host hq-rtr.au-team.irpo
+
+Глава 9: Создание центрального управления
+Администратор начал настройку Samba AD-DC на HQ-SRV, но сначала временно отключил все интерфейсы через nmtui
+
+Он очистил старые конфигурации:
+rm -f /etc/samba/smb.conf
+rm -rf /var/lib/samba
+rm -rf /var/cache/samba
+Создал новые каталоги и начал процесс провижининга:
+mkdir -p /var/lib/samba/sysvol
+samba-tool domain provision
+После настройки включил службы:
+systemctl enable --now samba
+systemctl enable --now bind
+Когда bind отказался запускаться, администратор не растерялся. Он заглянул в конфигурационный файл, внёс необходимые изменения и перезапустил службу:
+nano /etc/bind/named.conf
+systemctl restart bind
+Проверив статус службы, он убедился, что всё работает как надо. Затем настроил аутентификацию Kerberos:
+nano /etc/krb5.conf
+samba-tool domain info 127.0.0.1
+kinit administrator@au-team.irpo
+Глава 10: Первые подданные королевства
+Пришло время создать первых пользователей. Администратор открыл волшебный инструмент admc и создал пять верных подданных:
+user1.hq
+user2.hq
+user3.hq
+user4.hq
+user5.hq
+Каждый получил свой уникальный пароль и права в королевстве.
